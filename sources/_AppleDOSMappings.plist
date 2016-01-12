@@ -18,6 +18,20 @@
 	</dict>
 	<dict>
 		<key>DOSFileType</key>
+		<integer>65</integer>
+		<key>Filename</key>
+		<string>HELLO</string>
+		<key>MacFormat</key>
+		<integer>0</integer>
+		<key>StartingAddress</key>
+		<integer>8192</integer>
+		<key>Valid</key>
+		<true/>
+		<key>Verified</key>
+		<true/>
+	</dict>
+	<dict>
+		<key>DOSFileType</key>
 		<integer>66</integer>
 		<key>Filename</key>
 		<string>PEERSOFTV15.S</string>
@@ -340,6 +354,34 @@
 	</dict>
 	<dict>
 		<key>DOSFileType</key>
+		<integer>65</integer>
+		<key>Filename</key>
+		<string>TF</string>
+		<key>MacFormat</key>
+		<integer>0</integer>
+		<key>StartingAddress</key>
+		<integer>8192</integer>
+		<key>Valid</key>
+		<true/>
+		<key>Verified</key>
+		<true/>
+	</dict>
+	<dict>
+		<key>DOSFileType</key>
+		<integer>65</integer>
+		<key>Filename</key>
+		<string>TIMRWAIT</string>
+		<key>MacFormat</key>
+		<integer>0</integer>
+		<key>StartingAddress</key>
+		<integer>8192</integer>
+		<key>Valid</key>
+		<true/>
+		<key>Verified</key>
+		<true/>
+	</dict>
+	<dict>
+		<key>DOSFileType</key>
 		<integer>66</integer>
 		<key>Filename</key>
 		<string>TUTMC.S</string>
@@ -347,6 +389,34 @@
 		<integer>2</integer>
 		<key>StartingAddress</key>
 		<integer>2305</integer>
+		<key>Valid</key>
+		<true/>
+		<key>Verified</key>
+		<true/>
+	</dict>
+	<dict>
+		<key>DOSFileType</key>
+		<integer>65</integer>
+		<key>Filename</key>
+		<string>TUTORIAL</string>
+		<key>MacFormat</key>
+		<integer>0</integer>
+		<key>StartingAddress</key>
+		<integer>8192</integer>
+		<key>Valid</key>
+		<true/>
+		<key>Verified</key>
+		<true/>
+	</dict>
+	<dict>
+		<key>DOSFileType</key>
+		<integer>65</integer>
+		<key>Filename</key>
+		<string>TUTORIAL2</string>
+		<key>MacFormat</key>
+		<integer>0</integer>
+		<key>StartingAddress</key>
+		<integer>8192</integer>
 		<key>Valid</key>
 		<true/>
 		<key>Verified</key>
