@@ -1,0 +1,828 @@
+* Base addresses for mouse interface
+BAXLO EQU $0478 X low
+BAYLO EQU $04F8 Y low
+BAXHI EQU $0578 X high
+BAYHI EQU $05F8 Y high
+BAMBS EQU $0778 Button status
+
+TRACE EQU $D805
+IRQV EQU $03FE Page 3 Interrupt vector
+
+* Reason codes for entering Mouse interface
+RSETM = 0
+RSRVM = 1
+RREAD = 2
+RCLR = 3
+RPOS = 4
+RCLM = 5
+RHOM = 6
+RINI = 7
+
+CONINT EQU $E6FB FAC to single byte
+
+* Interrupt servicing routine
+IRQHDLR LDX #RSRVM
+ JSR TOMOUSE
+ BCS :2 ; Not from mouse or spurious
+ LDX MOSL
+ LDA BAMBS,X
+ LSR
+* Movement interrupt bit into b0 and
+* button bit into b1, VBL interrupt bit
+* into b2
+ AND #7 mask out other bits
+ TAX
+ LDA MSTATUS,X Get internal status
+ STA WORKPL1
+ LDX #RREAD
+ JSR TOMOUSE
+ BIT WORKPL1
+ BPL :1
+* Decrement runtime counter
+ DO KOPT16
+ CLC
+ XCE
+ REP $20 16bits for mem/accu
+ DEC TIINC
+ BNE :03
+ PHP  ;Z bit on stack
+ LDA KTINC
+ STA TIINC
+ PLP ;restore Z bit from stack
+:03 XCE  ;Back to emulation mode
+ BEQ :1 ;RTI if time for advising
+ ELSE
+ LDX TIINC
+ BNE :01
+ DEC TIINC+1
+:01 DEX
+ STX TIINC
+ BNE :02
+ LDA TIINC+1
+ BEQ :00
+:02
+ FIN
+ DO KOPT-K6502
+ LDA #$80
+ TRB WORKPL1
+ ELSE
+ LDA #$7F
+ AND WORKPL1
+ STA WORKPL1
+ FIN
+:1 LDA WORKPL1
+ DO KOPT-K6502
+ TSB MIRQST
+ ELSE
+ ORA MIRQST
+ STA MIRQST
+ FIN
+]LOOP RTI
+
+* No spurious interrupt is fatal to us..
+* I'm afraid of no ghosts.... ;-)
+:2 LDA OLDVECT+1
+ CMP #>$FF65
+ BNE :20
+ LDA OLDVECT
+ CMP #$FF65
+ BEQ ]LOOP
+:20 JMP (OLDVECT)
+
+ DO KOPT16
+ ELSE
+:00 LDA KTINC
+ STA TIINC
+ LDA KTINC+1
+ STA TIINC+1
+ DO KOPT-K6502
+ BRA :1
+ ELSE
+ JMP :1
+ FIN
+ FIN
+
+* Install new IRQ handler and save the original handler
+* to build a daisy chain..
+* Nouveau mode dans MOMODE
+INSIRQV LDA MOMODE
+ CMP #2
+ BCC :1
+ DO KOPT16
+ SEI
+ CLC
+ XCE
+ REP $20
+ MX %01
+ LDA IRQV Si IRQV est deja egal a IRQHDLR
+ CMP #IRQHDLR alors pas de m.a.j. necessaire
+ BEQ :0
+ STA OLDVECT
+ LDA #IRQHDLR
+ STA IRQV
+:0 SEC
+ XCE
+ MX %11
+ ELSE
+ LDA IRQV
+ LDX IRQV+1
+ CMP #IRQHDLR
+ BNE :0
+ CPX #>IRQHDLR
+ BEQ :1
+:0 SEI
+ STA OLDVECT
+ STX OLDVECT+1
+ STID IRQHDLR;IRQV
+ FIN
+ CLI
+:1 RTS
+
+* Deinstall IRQ handler
+DINSIRQV LDA MOMODE
+ CMP #2
+ BCS :1
+ SEI
+ DO KOPT16
+ CLC ;This instruction...
+ XCE
+ REP $20
+ MX %01
+ LDA OLDVECT
+ BEQ :0
+ STZ OLDVECT
+ STA IRQV
+:0 SEC
+ XCE
+ MX %11
+ ELSE
+ LDA OLDVECT+1
+ BEQ :1
+ STA IRQV+1
+ DO KOPT-K6502
+ STZ OLDVECT+1
+ ELSE
+ LDA #0
+ STA OLDVECT+1
+ FIN
+ LDA OLDVECT
+ STA IRQV
+ FIN
+:1 RTS
+
+CMPCLAMP PHA
+* X/Y min% expression
+ JSR NEVAL
+ STA $0578
+ STY $0478
+* X/Y max% expression
+ JSR NEVAL
+ STA $05F8
+ STY $04F8
+ PLA
+ LDX #RCLM
+ JMP TOMOUSE
+
+IVALARG CMP FAC+4
+ BCC *+3
+ RTS
+ PLA
+ PLA
+]ERR JMP $E199 Illegal quantity error
+
+COMCLAMP LDA #0
+ JSR CMPCLAMP
+ LDA #1
+ BNE CMPCLAMP
+
+ROUT10 JSR NCHKCOM
+ JSR NGETBYT Get reason code in X reg.
+ DEX
+ DEX
+ BMI ]ERR
+ CPX #5
+ BCS ]ERR
+ JSR ISMOUSH
+ LDA MOMODE
+ AND #$F
+ BNE :1
+ LDX #37
+ JMP NERRH
+* Only READ (2), CLEAR (3), POS(4), CLAMP (5) and HOME (6)
+* reason codes are valid.
+:1 TXA
+ BEQ COMREAD
+ DEX
+ BEQ COMCLEAR
+ DEX
+ BEQ COMPOS
+ DEX
+ BEQ COMCLAMP
+ LDX #RHOM
+ HEX 2C Skip next two bytes
+COMCLEAR LDX #RCLEAR
+FINMOUSE JMP TOMOUSE
+
+COMREAD LDX MODERUN
+ BNE :1
+ LDX #RREAD
+ JSR TOMOUSE
+* Handles X% host variable
+:1 LDX MOSL
+ LDA BAXHI,X
+ JSR NPTRG
+ LDA BAXLO,X
+ STA (VARPNT),Y
+* Handle Y% host variable
+ LDA BAYHI,X
+ JSR NPTRG
+ LDA BAYLO,X
+ STA (VARPNT),Y
+* Handle S% for button status variable
+ LDA #0
+ JSR NPTRG
+ LDA BAMBS,X
+ STA (VARPNT),Y
+ RTS
+
+COMPOS
+* X% expression
+ JSR NEVAL
+ STA BAXHI,X
+ TYA
+ STA BAXLO,X
+* Y% expression
+ JSR NEVAL
+ STA BAYHI,X
+ TYA
+ STA BAYLO,X
+ LDX #RPOS
+ JMP FINMOUSE
+
+]ERR JMP GOTMIERR TYPE MISMATCH ERROR
+NPTRG PHA
+ JSR NCHKCOM
+ JSR NPTRGTX
+ LDA INTTYP
+ BPL ]ERR
+ AND #15 cater for integer subtypes
+ BEQ :1 only $80 and $82 are valid
+ CMP #2
+ BNE ]ERR
+:1 LDX MOSL
+ PLA
+ DO KOPT-K6502
+ STA (VARPNT)
+ LDY #1
+ ELSE
+ LDY #0
+ STA (VARPNT),Y
+ INY
+ FIN
+ RTS
+
+* Result in FAC+3, FAC+4
+NEVALC JSR NCHKCOM
+ JSR NFRMNUM
+ JMP NROUT Replac. for ROUND.FAC/AYINT
+
+NEVAL JSR NEVALC
+ LDA FAC+3
+ LDY FAC+4
+ LDX MOSL
+]RET RTS
+
+* Common subroutine for parsing new tokens
+* X upon entry: 0: updates TXTPTR if token found
+* 1: skip updating TXTPTR even when token found
+COMLBS STX GFLAG
+ DO KOPT-K6502
+ LDA (TXTPTR)
+ ELSE
+ LDX #0
+ LDA (TXTPTR,X)
+ FIN
+ BMI :2
+ CMP #'M'
+ BEQ :1
+ CMP #'T'
+ BNE :2
+:1 LDX #3
+ JSR RECON1
+ BEQ ]RET
+ JSR COMINT4 Check mouse hardware/reinit
+ LDX GFLAG
+ BNE ]RET
+ JMP ADDON will exit with Z flag clear
+:2
+ DO KOPT-K6502
+ LDX #0
+ ELSE
+ TXA
+ FIN
+]RET RTS
+
+* New instructions handling
+* for MOUSE and TIMER instructions
+]LOOP JMP RST102
+]ERR1 PLA ;Pull IDMOCL from stack
+ PLA ;Pull return address
+ PLA
+]ERR JMP SYNERR
+* MOUSE/TIMER STOP handler
+]JLOOP CPY #OFFTIM-TOFFST
+ LDX #0
+ BCC *+3 Branch iif MOUSE
+ INX
+ LDA MOMODE
+ AND MOETMSK,X
+* Compare to minimum allowable value
+ CMP MOCMPVAL,X
+ BCS :0 OK iif greater or equal
+ LDX #37
+ JMP NERRH
+:0 LDA #1 Update MODEPEC configuration
+ STA MODEPEC,X
+ JMP NEWSTT
+LBS10 LDX #0
+ JSR COMLBS
+ BEQ ]LOOP
+ LDA IDMOCL
+ PHA
+ DO KOPT-K6502
+ LDA (TXTPTR)
+ LDY #1
+ ELSE
+ LDY #0
+ LDA (TXTPTR),Y
+ INY
+ FIN
+ CMP #$B3 STOP token?
+ BEQ :3
+ CMP #$B4
+ BEQ :3 ON token?
+ CMP #'O'
+ BNE ]ERR1
+ LDX #5 Look up possible OFF pattern
+ JSR RECON1
+ BEQ ]ERR1
+:3 TAX ;X STOP/ON token or 0 (OFF)
+ STX XSAV
+ JSR ADDON
+ MPLY  ;IDMOCL in Y register
+ PLA
+ PLA
+ JSR RST102
+ BEQ :23 If EOI found
+ CPX #$B4
+ BNE ]ERR SYNTAX ERR if not ON nor EOI
+ MPHX
+ MPHY  ;Save IDMOCL on stack again
+ JSR NEVALC Get factor/mode value after comma
+ MPLY
+ MPLX
+ STX XSAV
+ CPY #OFFMOU-TOFFST
+ BNE :20
+ JSR $E6FE FAC integer -> single byte
+ HEX 2C
+:23 LDX #1
+:20 STX GFLAG
+ STY IDMOCL
+ LDA XSAV  A: ON/OFF/STOP index
+ CMP #$B3 STOP token?
+ BEQ ]JLOOP
+* IDMOCL in page zero, STOP/ON/OFF indic. in A reg.
+ LDX IDMOCL
+ CPX #OFFMOU-TOFFST
+ BNE TIMEINST
+
+* Mouse event handler
+ CMP #$B4 MOUSE ON?
+ BNE *+6 No
+ LDX #0
+ BEQ :8
+ LDX #7
+]LOOP CPX GFLAG
+ BEQ :8
+ DEX
+ DEX
+ BPL ]LOOP
+]LOOP JMP NILLM
+ DO KOPT-K6502
+:8 LDA #7
+ TRB MOMODE
+ TXA
+ TSB MOMODE
+ CMP #2
+ ELSE
+:8 LDA MOMODE
+ AND #%11111000
+ CPX #2
+ STX GFLAG
+ ORA GFLAG
+ STA MOMODE
+ FIN
+ LDA #0
+ TAY
+ BCC *+4
+COMMON9 LDA #2
+ STA MODEPEC,Y
+COMMON LDA MOMODE
+ PHA
+ JSR INSIRQV
+ PLA
+ LDX #RSETM
+ JSR TOMOUSE
+ BCS ]LOOP
+ JSR DINSIRQV
+ JMP NEWSTT
+
+TIMEINST CMP #$B4 TIMER ON
+ DO KOPT-K6502
+ LDA #8
+ TRB MOMODE
+ BCC COMMON
+ TSB MOMODE
+ ELSE
+ LDA MOMODE
+ BCS *+6 Yes
+ AND #7
+ BCC *+4 Always
+ ORA #8
+ STA MOMODE
+ BCC COMMON
+ FIN
+ BIT GFLAG
+ BMI *+8
+ LDX #1
+ LDY #0
+ BPL *+6 Always
+ LDX FAC+4
+ LDY FAC+3
+ PHP
+ SEI
+ STY KTINC+1
+ STX KTINC
+ STY TIINC+1
+ STX TIINC
+ PLP
+ LDY #1
+ BCS COMMON9 Always
+
+* Do we have suitable mouse hardware?
+COMINT4 JSR ISMOUSH Fall into SWREINIT if yes
+* Routine below to check whether we should init the
+* MOUSE system?
+SWREINIT
+ DO KOPT-K6502
+ LDA #$80
+ TSB MONU
+ BNE :0
+ ELSE
+ BIT MONU
+ BMI :0
+ SEC
+ ROR MONU
+ FIN
+* INITMOUSE was performed on Peersoft boot when in an
+* Apple 2,2+ host.
+ LDA MACHINE
+ BEQ :0
+ MPHY
+ LDX #RINI
+ JSR TOMOUSE
+ MPLY
+:0 RTS
+
+]LOOP JMP (MVECTOR)
+
+TOMOUSE LDY OM_DEB,X
+ LDX MOCN
+ PHP
+ SEI
+ STY MVECTOR
+ LDY MON0
+ JSR ]LOOP
+ BCS *+5
+ PLP
+ CLC
+ RTS
+ PLP
+ SEC
+ RTS
+
+* Entry routine for MOUSE functions (either MOUSE or
+* TIMER).
+MTFUNC PHA
+ JSR CONINT
+ JSR NCHKCLS
+ JSR COMINT4
+ PLA
+ BNE TFUNC
+ LDA #2
+ JSR IVALARG
+ LDX MODERUN
+ BNE *+7 Branch if within interrupt
+ LDX #RREAD
+ JSR TOMOUSE
+ LDX MOSL
+ DO KOPT-K6502
+ LDA FAC+4
+ DEC
+ ELSE
+ LDY FAC+4
+ DEY
+ FIN
+ BPL :1
+ LDA BAXHI,X MOUSE(0) means read X
+ LDY BAXLO,X
+]LOOP JMP GIVAYF
+:1 DO KOPT-K6502
+ DEC
+ ELSE
+ DEY
+ FIN
+ BPL :2
+ LDA BAYHI,X MOUSE(1) means read Y
+ LDY BAYLO,X
+ DO KOPT-K6502
+ BRA ]LOOP
+ ELSE
+ JMP GIVAYF
+ FIN
+:2 LDY BAMBS,X MOUSE(2) means read buttons
+ JMP SNGFLT
+TFUNC LDA #1
+ JSR IVALARG
+ JSR ISHOSTOK
+ LDX #0
+ LDA FAC+4
+ BEQ *+4
+ LDX #2
+ LDA KTINC+1,X
+ LDY KTINC,X
+ DO KOPT-K6502
+ BRA ]LOOP
+ ELSE
+ BCS ]LOOP Carry set as ISHOSTOK res.
+ FIN
+
+* Desactive le traitement d'une interruption (sur RETURN)
+* Y en entree: indice de l'interruption
+COMINT1 LDA #0
+ STA MODERUN,Y
+ DO KOPT-K6502
+ DEC
+ ELSE
+ LDA #$FF
+ FIN
+ STA YICUR
+* MODEPEC passe de STOP a ON
+ DO KOPT-K6502
+ LDA MODEPEC,Y
+ CMP #1
+ BNE :0
+ INC
+ ELSE
+ LDX MODEPEC,Y
+ CPX #1
+ BNE :0
+ INX
+ TXA
+ FIN
+ STA MODEPEC,Y
+:0 LDA TPT_B,Y
+ STA TXTPTR
+ LDA TPT_T,Y
+ STA TXTPTR+1
+ LDA CLN_B,Y
+ STA CURLIN
+ LDA CLN_T,Y
+ STA CURLIN+1
+ LDA OTPT_B,Y
+ STA OLDTEXT
+ LDA OTPT_T,Y
+ STA OLDTEXT+1
+ LDX SVMTACTV
+ LDA MODERUN
+ ORA MODERUN+1
+ BNE *+8
+ STA SVMTACTV
+ STX MTACTV
+ LDY #5
+ CPY FRGNDCTX
+ BNE :1
+ PLA
+ PLA
+ JMP RW2
+:1 RTS
+
+* Routine en charge de determiner si l'interruption peut
+* ou non etre cascadee.
+* Sortie: bitN a 0 ssi possibilite de cascade (indice
+* dans Y)
+COMINT2 LDY #1 On commence par la TIMER
+]LOOP LDA MSKINT,Y
+ PHP ;Sauve le interrupt enable
+ SEI ;courant
+ AND MIRQST
+ BEQ :3
+* Uniquement si prise en compte immediate..
+ LDX MODEPEC,Y
+ CPX #2
+ BNE :3
+* Uniquement si routine non deja active
+ LDX MODERUN,Y
+ BNE :3
+ DO KOPT-K6502
+ TRB MIRQST
+ ELSE
+* A containes either $40 or $80
+ EOR #$C0
+ AND MIRQST
+ STA MIRQST
+ FIN
+ PLP
+ LDA #3-1 because from within a called subr.
+ JSR CHKMEM
+ STY YICUR
+ LDA MTACTV
+ STA SVMTACTV
+ LDA #1
+ STA MODEPEC,Y
+ STA MODERUN,Y
+ RTS
+:3 PLP
+ DEY
+ BPL ]LOOP
+ RTS
+
+* Retour d'une interruption souris
+RETOURM LDY #0
+ HEX 2C Skip next two bytes
+RETOURT LDY #1
+ TSX
+ STX REMSTK
+ JSR COMINT1
+ JSR DECTPTR
+ JSR ISCNTC
+ JMP TRACE
+
+RNEWINST LDA MODERUN
+ ORA MODERUN+1
+ BEQ RNI2
+* Y a la bonne valeur selon MOUSE ou TIMER actifs
+ LDY YICUR
+ BPL :1
+ INY ;Y passe de FF a 0
+ LDA MODERUN+1
+ BEQ *+3
+ INY ;Y passe a 1
+ STY YICUR
+:1 TSX
+ TXA
+* Routine terminee par RETURN/POP ayant ramene le SP
+ CMP INTSPTR,Y
+ BCC RNI2
+ JSR COMINT1
+* ...
+RNI2 LDA MIRQST
+ BEQ :4
+ JSR COMINT2
+ BMI :4 ;
+* Reminder of current stack pointer
+ TSX
+ TXA
+ STA INTSPTR,Y
+* Builds the GOSUB stack frame
+ CPY #1 carry set iif TIMER int.
+ DO KOPT16
+ BCS *+7
+ PEA RETOURM-1
+ BCC *+5
+ PEA RETOURT-1
+ ELSE
+ BCS *+8
+ LDX #RETOURM-1
+ LDA #>RETOURM-1
+ BNE *+6
+ LDX #RETOURT-1
+ LDA #>RETOURT-1
+ PHA
+ MPHX
+ FIN
+ LDA TXTPTR+1
+ STA TPT_T,Y
+ PHA
+ LDA TXTPTR
+ STA TPT_B,Y
+ PHA
+ LDA CURLIN+1
+ STA CLN_T,Y
+ PHA
+ LDA CURLIN
+ STA CLN_B,Y
+ PHA
+ LDA OLDTEXT
+ STA OTPT_B,Y
+ LDA OLDTEXT+1
+ STA OTPT_T,Y
+ LDA #TOKGOSUB
+ PHA
+* and initialize the context for irq handler
+* (before falling into NEWSTT)
+ LDX AHNDHI,Y
+ LDA AHNDLO,Y
+ STA TXTPTR
+ STX TXTPTR+1
+ JMP NEWSTT
+
+:4 JMP RNEWISUI
+
+ISHOSTOK LDA MACHINE
+ CMP #$41 Enhanced 2e ROM pattern
+ BCC HNOK
+]RET RTS
+ISMOUSH LDA MOCN
+ BNE ]RET
+ LDX #32
+ HEX 2C Skip next two byte
+HNOK LDX #33
+NERRHP PLA ;Pull return address
+ PLA
+ HEX 2C
+NILLM LDX #36
+* Error handler for new reason codes
+* Upon entry, possible values of X
+* 32: MOUSE NOT DETECTED
+* UNSUPPORTED HARDWARE CONFIG.
+* UNKNOWN APPLESOFT MOUSE EVENT HANDLER
+* Same for TIMER
+* ILLEGAL MOUSE MODE
+* ILLEGAL MOUSE OP.
+NERRH BIT ERRFLG
+ BPL *+5
+ JMP $E2F9 to ROM Error handler code
+ JSR CRDO
+ JSR $DB5A Output question mark
+ LDA CODR-32,X
+ TAX
+]LOOP LDA MESSERR,X
+ PHA
+ JSR OUTDO
+ INX
+ PLA
+ BPL ]LOOP
+ JMP $D42A Fall into ROM code tail
+
+RWAIT JSR $E746 Get address in LINNUM,
+ STX FORPNT  mask in X (saved)
+ LDX #0
+ JSR $00B7
+ BEQ *+5
+ JSR COMBYTE
+ STX FORPNT+1
+ DO KOPT-K65C02
+ LDY #0
+ FIN
+COMWAIT
+]LOOP LDA MIRQST
+ BNE :2
+ DO KOPT-K6502
+ LDA (LINNUM)
+ ELSE
+ LDA (LINNUM),Y
+ FIN
+ EOR FORPNT+1
+ AND FORPNT
+ BEQ ]LOOP
+ RTS
+:2 JSR COMINT2
+ DO KOPT-K6502
+ BMI ]LOOP
+ ELSE
+ BPL *+5
+ INY
+ BEQ ]LOOP Always
+ FIN
+ MPHY
+ LDY #5
+ STY FRGNDCTX
+]LOOP LDX SVWOF,Y
+ LDA 0,X
+ STA SVA,Y
+ DEY
+ BPL ]LOOP
+ MPLY
+ JMP RNI2+10
+
+RW2 LDY #6
+]LOOP LDX SVWOF-1,Y
+ LDA SVA-1,Y
+ STA 0,X
+ DEY
+ BNE ]LOOP
+ STY FRGNDCTX
+ BEQ COMWAIT Always
+                                                                                                                                   

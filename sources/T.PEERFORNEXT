@@ -1,0 +1,605 @@
+* Module en charge du traitement de boucles FOR/NEXT
+* en variante classique comme en variante FOREACH
+GTFORPNT EQU $D365
+GETSPA EQU $E452 Get mem. space for new string
+
+]ERR JMP GOTMIERR
+FEFOR JSR NCHKCOM Ensure trailing comma
+ DO KOPT16
+ PEI FORPNT
+ PEI VALTYP
+ ELSE
+ LDA FORPNT+1
+ PHA
+ LDA FORPNT
+ PHA
+ LDA INTTYP
+ PHA
+ LDA VALTYP
+ PHA
+ FIN
+ JSR NGTA2
+ BCC ]ERR En attendant mieux..
+* Same element type for array and loop variable?
+ PLA
+ EOR VALTYP
+ BNE ]ERR
+ PLA
+ EOR INTTYP
+ BNE ]ERR
+ PLA
+ STA FORPNT
+ PLA
+ STA FORPNT+1
+* LOWTR address: array base address
+* FORPNT address: simple variable value address
+ JSR GTFORPNT
+ BNE :1 Si pas trouvee
+* Si oui, on revient au debut de la struct. dans la pile
+ TXA
+ ADC #15
+ TAX
+ TXS
+:1 PLA ;Pop return address
+ PLA
+* Check enough space on stack and start computing
+* TXTPTR for body loop.
+ JSR LBS60
+ PHA
+ LDA TXTPTR+1
+ ADC #0
+ PHA
+ DO KOPT16
+ PEI CURLIN
+ ELSE
+ LDA CURLIN+1
+ PHA
+ LDA CURLIN
+ PHA
+ FIN
+* Analyse array: result $9D and $A0 in abs. form
+ JSR LBS61
+ JSR LBS63 Copy 1st elm into loop var.
+ JSR LBS68 From abs to offset(ARYTAB)
+SFE1 LDA #FESTEP
+ LDY #>FESTEP
+ JMP LBS62
+
+FESTEP LDA #%10100101
+ JMP COMFOR
+
+]ERR JMP SYNERR
+RFOR JSR ITEACH ;FOREACH variant?
+ PHP ;Z bit on stack
+ DO KOPT-K6502
+ STZ SUBFLG
+ ELSE
+ LDX #0
+ STX SUBFLG
+ FIN
+ JSR NPTRGET
+ STA FORPNT
+ STY FORPNT+1
+ CMP ARYTAB
+ TYA
+ SBC ARYTAB+1
+ BCS ]ERR
+ PLP
+ BEQ FEFOR
+ LDY #1
+ LDA (LOWTR),Y
+ DO KOPT-K6502
+ EOR (LOWTR)
+ ELSE
+ DEY
+ EOR (LOWTR),Y
+ FIN
+ BMI ]ERR
+ LDA INTTYP
+ PHA
+ JSR RLET1
+ PLA
+ STA GFLAG
+ JSR GTFORPNT
+ BNE :0
+ TXA  ;Stackframe pointer in X
+ ADC #$0F Carry already set, add 16
+ TAX ;+2 bytes (lines below)
+ TXS ;= 18 bytes
+:0 PLA
+ PLA
+ BIT GFLAG
+ BMI :1
+ JMP $D779
+* Check that enough stack available and
+* compute Y as offset to next separator
+:1 JSR LBS60
+ PHA
+ LDA TXTPTR+1
+ ADC #0
+ PHA
+ LDA #TOKTO
+ JSR NSYNCHR
+ DO KOPT16
+ PEI CURLIN
+ ELSE
+ LDA CURLIN+1
+ PHA
+ LDA CURLIN
+ PHA
+ FIN
+ CLC
+ JSR LBS033
+STP1 LDA #STEP
+ LDY #>STEP
+ JMP LBS62
+
+STEP JSR RST102
+ LDY #1
+ STY FACLO
+ DO KOPT-K65C02
+ DEY
+ STY FACMO
+ ELSE
+ STZ FACMO
+ FIN
+ CMP #TOKSTEP
+ CLC
+ BNE *+9
+ JSR RST100
+ SEC
+ JSR LBS033
+ PHP
+ LDY #1 Step value > 0 par defaut
+ BCS :1 Branch iif inversion de signe
+ LDA FACMO
+ BMI :1
+ ORA FACLO
+ BNE :2
+ HEX 24 Skip next byte
+:1 DEY
+ DEY
+:2 TYA
+ EOR #$80 Tag for integer var.
+ AND #%11000011
+ BIT WMODE
+ BPL *+4
+ ORA #%00100000 Set Unsigned arith. flag
+ PLP
+ BCC *+4
+ ORA #%00010000 Set reverse step value sign
+COMFOR JSR NFRMSTK2
+ DO KOPT16
+ PEI FORPNT
+ JMP $D7CF
+ ELSE
+ JMP $D7C9
+ FIN
+
+* Incrementation de l'index d'elm.
+]LOOP INC AEI Incrementation de l'index d'elm
+ BNE *+5
+ INC AEI+1
+* From new array element to loop var (value)
+ JSR LBS63
+ LDY INDEX Write back $9D,$9E to stack
+ JSR LBS67
+ TSX
+ JMP $DD3E
+
+FENEXT JSR LBS64 Step FP value into FAC
+ JSR LBS69 From offset(ARYTAB) to absol.
+ JSR LBS65 Loop var. back into array elm.
+ LDA $9F
+ CLC
+ ADC $9D
+ STA $9D
+ BCC *+4
+ INC $9E
+* Loop exhausted?
+ CMP $A0
+ LDA $9E
+ SBC $A1
+* Carry set iif loop exhausted
+ BCC ]LOOP
+ DO KOPT-K6502
+ STZ AEI
+ STZ AEI+1
+ ELSE
+ LDA #0
+ STA AEI
+ STA AEI+1
+ FIN
+ TSX
+ JMP COMNEXT Always
+
+]LOOP JMP $DD0B NEXT WITHOUT FOR error
+RNEXT BNE NEXT1
+ LDY #0
+ BEQ *+5
+NEXT1 JSR NPTRGTX
+ STA FORPNT
+ STY FORPNT+1
+ JSR $D365
+ BNE ]LOOP
+ TXS
+ LUP 4
+ INX
+ --^
+ TXA ;Base address of STEP value
+ LUP 6
+ INX
+ --^
+ STX DEST Base adress of TO value
+ TAY
+ TSX
+ LDA $0109,X
+ STA GFLAG
+ ASL
+ BCC :1
+ BPL :2
+]LOOP TYA
+ LDX DEST
+ JMP $DD1D FP var: classic mechanic
+:1 BPL ]LOOP
+:2 AND #%00001000 Voir ASL precedent..
+ BNE FENEXT
+ LDX #0
+ JSR LBS05 Step value into $A0, $A1
+ BNE *+4
+ LDX #4
+ BVC *+3
+ INX
+ BCC *+6
+ TXA
+ ORA #8
+ TAX
+ JSR HNDLEIY Current value in FORPNT
+ LDX #-1
+ LDY DEST
+ JSR LBS051
+ PHP
+ LDX #-1 endvalue > FAC par defaut
+ LDY #1
+ LDA $A1
+ PLP
+* A: -1 iif endvalue > current value
+* A: 0 iif endvalue = current value
+* A: 1 iif endvalue < current value
+ BCC :SI Branch iif signed arithmetic
+ BNE :7
+ DO KOPT-K6502
+ SBC (FORPNT)
+ ELSE
+ DEY
+ SBC (FORPNT),Y
+ FIN
+ BEQ *+5
+ BCS *+4
+ INX
+ INX
+]LOOP TXA
+ GOTO :10
+:7 SBC (FORPNT),Y
+ STA A1L
+ LDA $A0
+ DO KOPT-K6502
+ SBC (FORPNT)
+ ELSE
+ DEY
+ SBC (FORPNT),Y
+ FIN
+ ORA A1L
+ BEQ ]LOOP-1
+ BCS ]LOOP
+ BCC ]LOOP-2 Always
+
+* Signed arithetic comparison
+:SI SEC
+ BNE :6
+ DO KOPT-K6502
+ SBC (FORPNT)
+ ELSE
+ DEY
+ SBC (FORPNT),Y
+ FIN
+ BNE :5
+ INX
+ GOTO :5
+:6 SBC (FORPNT),Y
+ BNE *+3
+ INX
+ LDA $A0
+ DO KOPT-K65C02
+ DEY
+ SBC (FORPNT),Y
+ ELSE
+ SBC (FORPNT)
+ FIN
+:5 BVS :C1
+ BMI :LT
+]LOOP BNE :C20
+ TXA ;A=0 if both bytes equal
+ HEX 2C next two bytes
+:C20 LDA #-1
+ HEX 2C
+:LT LDA #1
+ HEX 2C Skip next two bytes
+:C1 BPL ]LOOP
+:10 TAY
+ LDA GFLAG
+ AND #%00000011
+ TAX
+ LDA MOTGF,X
+ STA GFLAG
+ TYA
+ TSX
+ SEC
+ SBC GFLAG
+ BEQ *+5
+ JMP $DD3E Processing next loop iteration
+COMNEXT TXA ;Arithmetic of frame pointer
+ ADC #17 Carry set so add 18
+ TAX
+ TXS
+ JSR RST102
+ CMP #','
+ BNE *+8
+ JSR RST100
+ JSR NEXT1 Does not return
+ JMP NEWSTT
+
+LBS05 LDA #1
+ STA INDEX+1
+LBS051 JSR LBS641
+ LDA GFLAG
+ ASL
+ ASL
+ ASL ;Unsigned into carry and reverse into ovf
+ CLV
+ BPL *+5
+ BIT ]RET
+ LDA (FORPNT),Y Y a 4: pointe sur le subtype
+ EOR #$81 Z a 1 ssi BYTE
+ RTS
+
+NFRMSTK2
+ TAY ;FAC sign or SGN(step value)
+ MPLX ;Pull return address and add one
+ PLA
+ INX
+ STX INDEX
+ BNE :1
+ DO KOPT-K6502
+ INC
+ ELSE
+ CLC
+ ADC #1
+ FIN
+:1 STA INDEX+1
+ MPHY
+ JMP FRMSTCK3+3
+
+* Analyse array: 1st array elm into $9D,9E and
+* address of next array in $A0,A1.
+LBS61 LDY #4
+ LDA (LOWTR),Y
+ AND #7 Isolate # of dims.
+ ASL ;2 bytes per dimensions
+ ADC #5 Carry clear
+ ADC LOWTR
+ STA $9D
+ LDA #0
+ DO KOPT-K65C02
+ TAY
+ FIN
+ ADC LOWTR+1
+ STA $9E
+ LDY #2
+ LDA (LOWTR),Y
+ INY
+ ADC LOWTR
+ STA $A0
+ LDA (LOWTR),Y
+ ADC LOWTR+1
+ STA $A1
+* Taille d'un element
+ JSR KWELMSIZ
+ STX $9F
+ RTS
+
+LBS62 STA INDEX
+ STY INDEX+1
+ JMP FRMSTCK3+3
+
+* From array element to loop var.
+LBS63 LDY $9F
+ CPY #3
+ BEQ :0 Special handling for strings
+ DEY
+]LOOP LDA ($9D),Y
+ STA (FORPNT),Y
+ DEY
+ BPL ]LOOP
+]RET RTS
+* Special handling for strings
+ DO KOPT-K6502
+:0 LDA ($9D) Length byte
+ STA (FORPNT)
+ ELSE
+:0 LDY #0
+ LDA ($9D),Y
+ STA (FORPNT),Y
+ FIN
+ BEQ ]RET Nothing to do if length zero
+ PHA
+ JSR LBS66
+ STA (FORPNT),Y
+* A1L,A1H: adresse source
+ LDA ($9D),Y
+ STA A1L+1
+ DEY
+ TXA
+ STA (FORPNT),Y
+ LDA ($9D),Y
+ STA A1L
+* Do the string copy itself: recall string length
+ DO KOPT-K6502
+ PLY
+COMCOPY DEY
+ ELSE
+ PLA
+COMCOPY TAY
+ DEY
+ FIN
+]LOOP LDA (A1L),Y
+ STA (A2L),Y
+ DEY
+ BPL ]LOOP
+ RTS
+
+* From loop var. to array elm.
+LBS65 LDY $9F
+ CPY #3
+ BEQ :0 Special handling for strings
+ DEY
+]LOOP LDA (FORPNT),Y
+ STA ($9D),Y
+ DEY
+ BPL ]LOOP
+]RET RTS
+* Special handling for strings
+ DO KOPT-K6502
+:0 LDA (FORPNT) Length byte
+ STA ($9D)
+ ELSE
+:0 LDY #0
+ LDA (FORPNT),Y Length byte
+ STA ($9D),Y
+ FIN
+ BEQ ]RET Nothing to do if length zero
+ PHA
+ JSR LBS66
+ STA ($9D),Y High byte
+* A1L,A1H: adresse source
+ LDA (FORPNT),Y
+ STA A1L+1
+ DEY
+ TXA
+ STA ($9D),Y
+ LDA (FORPNT),Y
+ STA A1L
+* Do the string copy itself: recall string length
+ DO KOPT-K6502
+ PLY
+ ELSE
+ PLA
+ FIN
+ BNE COMCOPY Always
+
+LBS66 JSR GETSPA
+* returns with Y,X pointer to new string
+* A2L,A2H: adresse destination
+ STY A2L+1
+ STX A2L
+ TYA
+ LDY #2
+ RTS
+
+* Subroutine: copy from stack to FAC in page zero
+LBS64 LDA #1
+ STA INDEX+1
+LBS641 STY INDEX
+ LDY #-1
+]LOOP INY
+ LDA (INDEX),Y
+ STA $9D,Y
+ CPY #4
+ BCC ]LOOP
+ RTS
+
+* From FAC to stack.. called from FENEXT
+* $9D is expected to be in absolute mode
+LBS67 LDA #1
+ STA INDEX+1
+ STY INDEX
+ LDA $9D Convert $9D$9E
+ SEC ; to offset(ARYTAB)
+ SBC ARYTAB
+ DO KOPT-K6502
+ STA (INDEX)
+ LDY #1
+ ELSE
+ LDY #0
+ STA (INDEX),Y
+ INY
+ FIN
+ LDA $9E
+ SBC ARYTAB+1
+ STA (INDEX),Y
+ RTS
+
+* From absolute address to offset from ARYTAB
+LBS68 LDX #$A0
+ JSR *+5
+ LDX #$9D
+ LDA 0,X
+ SEC
+ SBC ARYTAB
+ STA 0,X
+ LDA 1,X
+ SBC ARYTAB+1
+ STA 1,X
+ RTS
+
+* From offset to absolute address
+LBS69 LDY #$A0
+ JSR *+5
+ LDY #$9D
+ LDA 0,Y
+ CLC
+ ADC ARYTAB
+ STA 0,Y
+ LDA 1,Y
+ ADC ARYTAB+1
+ STA 1,Y
+ RTS
+
+* Return with Z flag set iif 'EACH' string @ TXTPTR
+* TXTPTR updated accordngly if so
+ITEACH LDY #-1
+]LOOP INY
+ LDA (TXTPTR),Y
+ CMP IFEACH,Y
+ BNE :0
+ CPY #3
+ BNE ]LOOP
+ TYA
+ ADC TXTPTR
+ STA TXTPTR
+ BCC *+4
+ INC TXTPTR+1
+ LDY #0 Set Zflag
+:0 RTS
+
+LBS033 JSR LBS03
+ PHP
+ LDA GFLAG
+ CMP #$81
+ BNE :0
+ JSR CONV1628
+:0 PLP
+ RTS
+
+* a) Enough space on stack?
+LBS60 LDA #9-2 -2 car on est dans une SUBR
+ JSR CHKMEM
+* b) Debut du calcul du nouveau TXTPTR
+* Comme c'est une operation avec la pile, oblige de
+* morceler l'operation
+ JSR DATAN Prochain separateur (offset Y)
+ CLC
+ TYA
+ ADC TXTPTR
+ RTS
+ f                                      

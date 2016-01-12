@@ -1,0 +1,621 @@
+* Module handling the new array processing strategy
+ERR_BSCR = $6B
+ERR_RDIM = $78
+ERR_SYNT = $10
+
+NUMDIM EQU $0F
+RESULT EQU $62
+STACK EQU $0100
+SUBERR EQU $E196 Raise a BAD SUBSCRIPT error
+MEMERR EQU $D410
+REASON EQU $D3E3
+GETARY EQU $E0ED
+GETARY2 EQU $E0EF Compute addr. of 1st elm value
+QINT EQU $EBF2
+
+* MULTPLSS multiplies (STRNG2) by ((LOWTR),Y) leaving
+* result in A,X. Hi byte also in Y
+MULTPLSS EQU $E2AD
+MULTPLY1 EQU $E2B6
+
+ DO KOPT16
+NARRAY CLC
+ XCE
+ REP $20
+ MX %01
+ LDY SUBFLG
+ ELSE
+NARRAY LDA SUBFLG
+ FIN
+ BNE NARRGL91
+ DO KOPT16
+ LDX DIMFLG
+ PHX
+ PEI VALTYP Pushes VALTYP/INTTYP into stack
+ ELSE
+ LDA DIMFLG
+ PHA
+ LDA INTTYP
+ PHA
+ LDA VALTYP
+ PHA
+ FIN
+ LDY #0
+]LOOP MPHY
+ DO KOPT16
+ PEI VARNAM
+ SEC
+ XCE
+ MX %11
+ ELSE
+ LDA VARNAM+1
+ PHA
+ LDA VARNAM
+ PHA
+ FIN
+ JSR NMAKINT
+ DO KOPT16
+ CLC
+ XCE
+ REP $20
+ MX %01
+ FIN
+ PLA
+ STA VARNAM Restore array name
+ DO KOPT16
+ ELSE
+ PLA
+ STA VARNAM+1
+ FIN
+ MPLY ;# of dims to Y reg.
+* Code below would transform the stack area
+* from
+*  DIMFLG
+*  INTTYP
+*  VALTYP
+* SPtr ->
+* to
+*  (FAC+3)
+*  (FAC+4)
+*  DIMFLG
+*  INTTYP
+*  VALTYP
+* SPtr ->
+ DO KOPT16
+ LDA 1,S Get VALTYP/INTTYP
+ PHA
+ LDA 5,S
+ TAX ;X set to DIMFLG
+ LDA FAC+3 Get FAC+3,4
+ XBA
+ STA 4,S Store it into (S+4)+5
+ SEC
+ XCE
+ MX %11
+ TXA ;Put DIMFLG back at offset
+ STA 3,S within stack frame
+ ELSE
+ TSX
+ LDA STACK+2,X Get INTTYP
+ PHA
+ LDA STACK+1,X Get VALTYP
+ PHA
+ LDA STACK+3,X Get DIMFLG
+ STA STACK+1,X In place of original VALTYP
+ LDA FAC+3
+ STA STACK+3,X In place of original DIMFLG
+ LDA FAC+4
+ STA STACK+2,X In place of original INTTYP
+ FIN
+* Now the stack frame looks like
+*  FAC+4
+*  FAC+3
+*  DIMFLG
+*  INTTYP
+*  VALTYP
+* SPtr ->
+ INY
+ JSR RST102
+ CMP #','
+ BEQ ]LOOP
+ STY NUMDIM
+ JSR NCHKCLS
+ PLA
+ STA VALTYP
+ PLA
+ STA INTTYP
+ PLA
+ STA DIMFLG
+
+
+NARRGL91 LDX ANCCH
+ BEQ :20
+ JSR ALKCACH
+ BNE USEOLDAR
+ DO KOPT16
+:20 CLC
+ XCE
+ REP $20
+ MX %1
+ LDY #2
+ LDA ARYTAB
+]LOOP STA LOWTR
+ CMP STREND
+ ELSE
+:20 LDA ARYTAB+1
+ LDX ARYTAB
+]LOOP STX LOWTR
+ STA LOWTR+1
+ CPX STREND
+ SBC STREND+1
+ FIN
+ BCS GNARRAY
+ DO KOPT-K6502
+ LDA (LOWTR)
+ ELSE
+ LDY #0
+ LDA (LOWTR),Y
+ FIN
+ EOR VARNAM
+ BNE :5
+ DO KOPT16
+ SEC
+ XCE  Back to mem/accu. 8bits
+ MX %11
+ ELSE
+ DO KOPT-K6502
+ LDY #1
+ ELSE
+ INY
+ FIN
+ LDA (LOWTR),Y
+ EOR VARNAM+1
+ BNE :5
+ FIN
+ LDX INTTYP
+ BPL USEOLDAR If FP or string array
+ JSR CNVT1
+ LDY #4
+ EOR (LOWTR),Y
+ AND #$C0 only test b6 and b7
+ BEQ USEOLDAR
+ DO KOPT16
+ CLC
+ XCE
+ REP $20
+ MX %01
+ LDY #2
+ FIN
+ CLC
+:5
+ DO 1!KOPT16
+ LDY #2
+ FIN
+ LDA (LOWTR),Y
+ ADC LOWTR
+ DO 1!KOPT16
+ TAX
+ INY
+ LDA (LOWTR),Y
+ ADC LOWTR+1
+ FIN
+ BCC ]LOOP Always
+
+GNARRAY
+ DO KOPT16
+ SEC
+ XCE
+ FIN
+ JMP MKNARRAY
+
+USEOLDAR LDA DIMFLG Called from the DIM stmt.?
+ BNE RDIMERR
+ LDA SUBFLG Subscripts given?
+ BEQ :1 Yes
+ SEC ;No: just return "array found"
+ RTS
+* Set ARYPNT to 1st elm. base addr
+:1 LDY #4
+ LDA (LOWTR),Y
+ AND #7
+ TAX
+ JSR GETARY2
+ LDA NUMDIM
+ CMP #1
+ BEQ :3
+ CPX NUMDIM
+ BNE SUBSERR
+ JMP NFAEP
+
+* Il s'agit de traiter de la reference unidimensionnelle
+* sur un tableau potentiellement multi-dimensions
+* Multiplier l'indice tire dans la pile par le elm size
+* et comparer par rapport a l'offset du tableau (corrige
+* de la taille du header).
+:3 PLA
+ STA STRNG2
+ PLA
+ STA STRNG2+1
+ JSR KWELMSIZ
+ STX RESULT+2
+ LDA #0
+ JSR MULTPLY1
+ STX STRNG2
+ STY STRNG2+1
+ LDY #4
+ LDA (LOWTR),Y # of dimensions
+ AND #7 Mask out new Peersoft bits
+ ASL  ;2 bytes per dimension
+ ADC #5 Carry clear
+* Add this to element offset from base address
+ ADC STRNG2
+ LDX STRNG2+1
+ BCC :4
+ INX
+:4 LDY #2
+ CMP (LOWTR),Y
+ STA VARPNT
+ INY
+ TXA
+ SBC (LOWTR),Y
+ BCS SUBSERR
+ STX VARPNT+1
+ LDA LOWTR
+ ADC VARPNT
+ STA VARPNT
+ LDA VARPNT+1
+ ADC LOWTR+1
+ STA VARPNT+1
+ TAY
+ LDA VARPNT
+ RTS
+
+SUBSERR LDX #ERR_BSCR
+ HEX 2C Skip next two bytes
+SNERR LDX #ERR_SYNT
+ HEX 2C
+RDIMERR LDX #ERR_RDIM
+ JMP $D412
+
+MKNARRAY LDA SUBFLG
+ BEQ :0
+ JMP $E1DC Raise OUT OF DATA error
+:0 JSR GETARY Address 1st elm in ARYPNT&Y,A
+ JSR KWELMSIZ
+ STX STRNG2
+ DO KOPT-K6502
+ STZ AUXBANK
+ ELSE
+ LDX #0
+ STX AUXBANK
+ FIN
+ LDA DIMFLG
+ BEQ :1
+ JSR ISAUXMEM
+ DO KOPT16
+:1 CLC
+ XCE
+ REP $20
+ MX %11
+ LDA ARYPNT
+ ELSE
+:1 LDA ARYPNT
+ FIN
+ JSR NREASON Ensure enough memory for array
+ LDA VARNAM
+ DO KOPT-K6502
+ STZ STRNG2+1
+ STA (LOWTR)
+ LDY #1
+ ELSE
+ LDY #0
+ STY STRNG2+1
+ STA (LOWTR),Y
+ INY
+ FIN
+ LDA VARNAM+1
+ STA (LOWTR),Y
+ LDY #4
+ LDA INTTYP
+ BEQ :2
+ TAX
+ JSR CNVT1
+:2 ORA NUMDIM
+ LDX AUXBANK
+ STA AUXBANK
+ TXA
+ ASL
+ ASL
+ ASL
+ ORA AUXBANK
+ STX AUXBANK
+ STA (LOWTR),Y
+]LOOP LDA #0 Hi byte of default dim
+ LDX #11 Lo byte of default dim
+ BIT DIMFLG
+ BVC :5
+ DO KOPT-K6502
+ PLX
+ PLA
+ INX
+ BNE *+3
+ INC
+ ELSE
+ PLA
+ CLC
+ ADC #1
+ TAX
+ PLA
+ ADC #0
+ FIN
+:5 INY ;Add this dimension to descr.
+ STA (LOWTR),Y
+ INY
+ TXA
+ STA (LOWTR),Y
+* Multiply this dimension by running size
+* ((LOWTR),Y) * (STRNG2) --> A,X
+ JSR MULTPLSS
+ STX STRNG2
+ STA STRNG2+1
+ LDY INDEX
+ DEC NUMDIM
+ BNE ]LOOP
+
+ LDY AUXBANK
+ BEQ :7
+ LDX #1 Ensure enough room in aux mem.
+ JSR ZRTAUX
+ CPX #1 X set to 0 iif enough room
+ BCS GME otherwise -> MEMORY ERROR
+ LDA ARYPNT
+ LDY ARYPNT+1
+ BCC :6 Always
+* Now A,X has the total # of bytes of array elements
+:7 ADC ARYPNT+1 Compute address of end of array
+ BCS GME Too large: error
+ STA ARYPNT+1
+ TAY
+ TXA
+ ADC ARYPNT
+ BCC :6
+ INY
+ BEQ GME Too large: error
+:6 JSR REASON Ensure enough room up to Y,A
+ STA STREND
+ STY STREND+1
+ SEC
+ SBC LOWTR
+ LDY #2
+ STA (LOWTR),Y
+ INY
+ LDA STREND+1
+ SBC LOWTR+1
+ STA (LOWTR),Y
+ LDA AUXBANK
+ BEQ :9
+ PHP
+ SEI
+ STA ALTZP
+ LDA STREND
+ LDX STREND+1
+ STA STDZP
+ PLP
+* AUXPTR a ete fixe dans ISAUXMEM a l'adresse du slot
+* Adresse du 1er element en p0.
+ DO KOPT-K6502
+ STA (AUXPTR)
+ LDY #1
+ ELSE
+ LDY #0
+ STA (AUXPTR),Y
+ INY
+ FIN
+ TXA
+ STA (AUXPTR),Y
+ INY
+ LDA STRNG2
+ STA (AUXPTR),Y
+ INY
+ LDA STRNG2+1
+ STA (AUXPTR),Y
+ LDX #2 Init memory slot for array
+ JSR ZRTAUX
+ GOTO :10
+* Zero fill the element segment within the array
+* (fast init).
+:9 INC STRNG2+1
+ LDY STRNG2 # of byte mod 256
+ BEQ :8 Upon a page limit
+]LOOP DEY
+ STA (ARYPNT),Y
+ BNE ]LOOP
+:8 DEC ARYPNT+1 Point to next page
+ DEC STRNG2+1 Count the pages
+ BNE ]LOOP Still more to clear
+ INC ARYPNT+1 Rollback last Decrement
+:10 LDA DIMFLG
+ BEQ NFAEP
+ RTS
+
+GME JMP MEMERR MEMORY FULL error
+NFAEP LDY #4
+* New routine for ROM FIND.ARRAY.ELEMENT
+* Y reg. should be 4 upon entry
+ LDA (LOWTR),Y
+ TAX
+ LUP 3
+ LSR
+ --^
+ AND #7
+ STA AUXBANK
+ TXA
+ AND #7
+ DO KOPT-K6502
+ STA NUMDIM
+ ELSE
+ STA NUMDIM
+ FIN
+ LDA #0
+ STA STRNG2
+]LOOP STA STRNG2+1
+ INY ;Pull next subscript from stack
+ MPLX
+ STX FAC+3
+ PLA
+ STA FAC+4
+ CMP (LOWTR),Y
+ BCC FAE2
+ BNE GSE Subscript is too large
+ INY
+ TXA
+ CMP (LOWTR),Y
+ BCC FAE3
+GSE JMP SUBERR BAD SUBSCRIPT error
+FAE2 INY
+FAE3 LDA STRNG2+1 Bypass multiplication if
+ ORA STRNG2  value so far is zero
+ CLC
+ BEQ :1
+ JSR MULTPLSS
+ TXA ;Add current subscript
+ ADC FAC+3
+ TAX
+ TYA
+ LDY INDEX
+:1 ADC FAC+4 Finish adding current subscript
+ STX STRNG2 Store accumulated offset
+ DEC NUMDIM Last subscript yet?
+ BNE ]LOOP No: loop till done
+ STA STRNG2+1 Yes: multiply by element size
+ JSR KWELMSIZ
+ LDA AUXBANK
+ BEQ :2
+:2 JMP $E298
+
+* Donne la taille de l'element en fonction
+* de VARNAM,+1 et de INTTYP
+* Result in X reg.
+KWELMSIZ BIT VARNAM
+ BPL :0
+ LDA INTTYP
+ AND #7
+ TAX
+ RTS
+:0 LDX #5
+ BIT VARNAM+1
+ BPL :1
+ DEX ;Back to 3 if string
+ DEX
+:1 RTS
+
+* Evaluate numeric formula at TXTPPTR
+* Converting result to INTEGER 0<= X < 65536
+* into FAC+3,4
+NMAKINT JSR RST100 Get next character
+ JSR NFRMNUM
+* Convert FAC to integer
+ LDA FACSIGN
+ BMI :1
+ LDA FAC
+ CMP #$90
+ BCC :3 Branch if abs(value) < 32768
+ JSR GN65536
+ JSR FADD
+:3 JMP QINT
+:1 JMP GOIQERR
+
+* Convert INTTYP (in X reg.) from $81 to $84
+* to %0000_0000 to %1100_0000 (respectively)
+* Output value could be ORA ed or EOR ed with
+* NUMDIM slot with array structure
+CNVT1 DEX
+ TXA
+ LSR ;b0 into Carry, 0 into b7
+ ROR ;b0 into b7 and b1 into carry
+ ROR ;b0 into b6, b1 into b7
+ AND #$C0 Only retain b6-b7
+ RTS
+
+* Cache mechanism for array variables
+ACTR EQU LOWTR
+ DO KOPT16
+ALKCACH TXA
+ ASL
+ STA SCTR
+ CLC
+ XCE
+ REP $20
+ MX %10
+ LDY INTTYP
+ LDX #0
+]LOOP CMP AVN,X
+ BNE :0
+ SEP $20
+ MX %11
+ TYA
+ EOR AIT,X 8bit EOR operation
+ REP $20
+ MX %10
+ BEQ :1
+ LDA VARNAM
+:0 INX
+ INX
+ CPX SCTR
+ BNE ]LOOP
+ SEC
+ XCE
+ MX %11
+ ELSE
+ALKCACH LDY VARNAM+1
+ LDA VARNAM
+ STX SCTR
+ LDX #0
+]LOOP CMP AVN,X
+ BNE :0
+ TYA
+ CMP AVNP1,X
+ BNE :2
+ LDA INTTYP
+ CMP AIT,X
+ BEQ :1
+:2 LDA VARNAM
+:0 INX
+ CPX SCTR
+ BNE ]LOOP
+ FIN
+ RTS
+
+:1 LDA ALTR,X
+ STA LOWTR
+ DO KOPT16
+ SEC
+ XCE
+ ELSE
+ LDA ALTRP1,X
+ STA LOWTR+1
+ FIN
+ TXA
+ RTS
+
+* Common entry point for accessing array content
+* within auxiliary memory.
+ZRTAUX LDA #$BF
+ STA $03EE
+ DO KOPT-K6502
+ STZ $03ED
+ ELSE
+ LDA #0
+ STA $03ED
+ FIN
+ CLV
+ SEC
+ JMP XFER
+
+NGARBAG BIT $C083
+ BIT $C083
+ JSR $D000
+ BIT $C081
+ BIT $C081
+ RTS
+ E                                                                   
